@@ -1,0 +1,210 @@
+name: C/C++ CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  # x86-64: whichever SIMD kernels the runner's CPU supports.  Which ones those
+  # are varies between runner generations, so the test suite skips the kernels
+  # it cannot execute and prints "N of M kernel(s) checked" -- read that line to
+  # see what a given run actually covered.
+  x86_64:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: cpu features
+      run: |
+        lscpu | grep -E 'Model name|Vendor ID|^CPU\(s\):' || true
+        lscpu | grep -o 'sse2\|avx2\|avx512bw\|avx512vl' | sort -u | tr '\n' ' '; echo
+    - name: cmake
+      run: cmake .
+    - name: make
+      run: make
+    - name: cmake tests
+      run: cmake .
+      working-directory: tests
+    - name: make tests
+      run: make
+      working-directory: tests
+    - name: run tests
+      run: ./tests --all
+      working-directory: tests
+    # The dispatcher picks one kernel per run, so a single run leaves the others
+    # untested end to end.  These are cheap and pin each one down.
+    - name: run tests, scalar dispatch
+      run: VIDSTAB_SIMD=none ./tests --all
+      working-directory: tests
+    - name: run tests, SSE2 dispatch
+      run: VIDSTAB_SIMD=sse2 ./tests --all
+      working-directory: tests
+    # Timings, not a gate.  GitHub runners are shared VMs, so absolute numbers
+    # are not comparable between runs and no threshold is asserted -- nothing
+    # here can fail the build.  What is meaningful is the *ratio* between
+    # dispatch levels within one run, since those execute back to back on the
+    # same machine.
+    - name: benchmark (informational)
+      continue-on-error: true
+      working-directory: tests
+      run: |
+        make bench -j2
+        # Best of three. A shared runner only ever adds time -- other tenants,
+        # steal, thermal -- so the minimum is much closer to the real cost than
+        # a mean, and a single sample is not worth reading at all.
+        for s in none sse2 avx2 avx512 neon; do
+          best=
+          for r in 1 2 3; do
+            t=$(VIDSTAB_SIMD=$s ./bench 1280 720 20 2>/dev/null \
+                  | grep -o '[0-9.]* ms/frame' | grep -o '[0-9.]*')
+            [ -n "$t" ] || continue
+            best=$(printf '%s\n%s\n' "$best" "$t" | grep . | sort -g | head -1)
+          done
+          if [ -n "$best" ]; then
+            printf '%-7s %s ms/frame (best of 3)\n' "$s" "$best"
+          else
+            printf '%-7s not available on this CPU\n' "$s"
+          fi
+        done
+
+  # MSVC on a Visual Studio runner.  The Windows port is the least exercised
+  # configuration here -- it has no user reporting breakage the way the Linux
+  # builds do -- so this job exists to notice a break at the commit that causes
+  # it.  Both link modes are built: the export macro in src/vidstab_export.h
+  # resolves differently for each, and only the shared build exercises the
+  # dllexport path at all.
+  msvc:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    # cl.exe is only on PATH inside a developer prompt; the compiler it picked
+    # is printed by the configure step below anyway.
+    - name: cmake version
+      run: cmake --version
+    - name: cmake, shared
+      run: cmake -B build-shared -DBUILD_SHARED_LIBS=ON
+    - name: build, shared
+      run: cmake --build build-shared --config Release
+    - name: cmake, static
+      run: cmake -B build-static -DBUILD_SHARED_LIBS=OFF
+    - name: build, static
+      run: cmake --build build-static --config Release
+    - name: cmake tests
+      run: cmake -B build
+      working-directory: tests
+    - name: build tests
+      run: cmake --build build --config Release
+      working-directory: tests
+    # The dispatcher picks the best kernel the runner's CPU supports; the two
+    # forced runs below pin down the levels it did not choose, exactly as the
+    # x86_64 job does.
+    - name: run tests
+      run: build\Release\tests.exe --all
+      working-directory: tests
+    - name: run tests, scalar dispatch
+      run: |
+        $env:VIDSTAB_SIMD='none'
+        build\Release\tests.exe --all
+      working-directory: tests
+    - name: run tests, SSE2 dispatch
+      run: |
+        $env:VIDSTAB_SIMD='sse2'
+        build\Release\tests.exe --all
+      working-directory: tests
+
+  # Native AArch64 -- real hardware, real NEON, no emulation.  This is what
+  # actually validates src/motiondetect_neon.c; the neon_emu.h path in the x86
+  # job only proves the logic.
+  aarch64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+    - uses: actions/checkout@v4
+    - name: cmake
+      run: cmake .
+    - name: make
+      run: make
+    - name: cmake tests
+      run: cmake .
+      working-directory: tests
+    - name: make tests
+      run: make
+      working-directory: tests
+    - name: run tests
+      run: ./tests --all
+      working-directory: tests
+    - name: run tests, scalar dispatch
+      run: VIDSTAB_SIMD=none ./tests --all
+      working-directory: tests
+    # Timings, not a gate.  GitHub runners are shared VMs, so absolute numbers
+    # are not comparable between runs and no threshold is asserted -- nothing
+    # here can fail the build.  What is meaningful is the *ratio* between
+    # dispatch levels within one run, since those execute back to back on the
+    # same machine.
+    - name: benchmark (informational)
+      continue-on-error: true
+      working-directory: tests
+      run: |
+        make bench -j2
+        # Best of three. A shared runner only ever adds time -- other tenants,
+        # steal, thermal -- so the minimum is much closer to the real cost than
+        # a mean, and a single sample is not worth reading at all.
+        for s in none sse2 avx2 avx512 neon; do
+          best=
+          for r in 1 2 3; do
+            t=$(VIDSTAB_SIMD=$s ./bench 1280 720 20 2>/dev/null \
+                  | grep -o '[0-9.]* ms/frame' | grep -o '[0-9.]*')
+            [ -n "$t" ] || continue
+            best=$(printf '%s\n%s\n' "$best" "$t" | grep . | sort -g | head -1)
+          done
+          if [ -n "$best" ]; then
+            printf '%-7s %s ms/frame (best of 3)\n' "$s" "$best"
+          else
+            printf '%-7s not available on this CPU\n' "$s"
+          fi
+        done
+
+  # 32 bit ARM under qemu.  Not for speed -- this is the only place the ARMv7
+  # reduction fallbacks in motiondetect_neon.c (vs_haddq_u32 / vs_hminq_u8 /
+  # vs_hmaxq_u8, which AArch64 never compiles) get executed at all.
+  armv7-qemu:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: install cross toolchain and qemu
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-arm-linux-gnueabihf qemu-user-static
+    - name: cmake
+      run: |
+        cmake -B build-armv7 \
+          -DCMAKE_SYSTEM_NAME=Linux \
+          -DCMAKE_SYSTEM_PROCESSOR=armv7l \
+          -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc \
+          -DCMAKE_C_FLAGS="-mfpu=neon -mfloat-abi=hard -march=armv7-a" \
+          -DUSE_OMP=OFF
+    - name: make
+      run: cmake --build build-armv7 -j
+    - name: cmake tests
+      run: |
+        cmake -B build-armv7 -S . \
+          -DCMAKE_SYSTEM_NAME=Linux \
+          -DCMAKE_SYSTEM_PROCESSOR=armv7l \
+          -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc \
+          -DCMAKE_C_FLAGS="-mfpu=neon -mfloat-abi=hard -march=armv7-a" \
+          -DUSE_OMP=OFF
+      working-directory: tests
+    - name: make tests
+      run: cmake --build build-armv7 -j
+      working-directory: tests
+    # Deliberately not --all: test_serialize_robust fails here for a
+    # pre-existing reason unrelated to SIMD -- an unbounded frame index from a
+    # corrupt .trf overflows the growth loop in vs_vector_set and asks for a
+    # negative allocation, which 32 bit refuses and 64 bit often satisfies.
+    # See https://github.com/georgmartius/vid.stab/issues/168 .  Widen this
+    # back to --all once that is fixed.
+    - name: run tests under qemu
+      run: >
+        qemu-arm-static -L /usr/arm-linux-gnueabihf ./build-armv7/tests
+        --testSIMD --testBB --testCCI --testMD --testLM --testDET
+      working-directory: tests

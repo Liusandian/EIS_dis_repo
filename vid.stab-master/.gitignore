@@ -1,0 +1,31 @@
+*.a
+*.o
+*.pc
+*.so
+*.so.*
+*~
+CMakeCache.txt
+CMakeFiles
+Makefile
+cmake_install.cmake
+install_manifest.txt
+
+local_build.txt
+.idea
+.claude
+
+
+# Don't include the build directory and compiled Mac dynamic libraries.
+build
+*.dylib
+
+# Outputs and binaries produced by the test suite.
+# Everything the tests write goes into their output directory, see
+# TEST_OUTPUT_DIR / testOut() in tests/testutils.h.
+testout/
+/tests/tests
+tests/build/
+
+# out-of-tree build directories used while benchmarking
+bld*/
+tests/tbld/

@@ -1,0 +1,279 @@
+# VidStab
+
+[![C/C++ CI](https://github.com/georgmartius/vid.stab/actions/workflows/c-cpp.yml/badge.svg)](https://github.com/georgmartius/vid.stab/actions/workflows/c-cpp.yml)
+
+Vidstab is a video stabilization library which can be plugged-in with Ffmpeg.
+
+**Why is it needed**
+
+A video acquired using a hand-held camera or a camera mounted on a vehicle, typically suffers from undesirable shakes and jitters. Activities such as surfing, skiing, riding and walking while shooting videos are especially prone to erratic camera shakes. Vidstab targets these video contents to help create smoother and stable videos.
+
+**Some of the features include:**
+
+ * Fast detection of subsequent transformations e.g. translation and rotations up to a given extent.
+ * Low pass filtered smoothing with adjustable horizon.
+ * L1-optimal camera path (Grundmann et al., CVPR 2011): the stabilized path is
+   composed of static, linear and parabolic segments, giving a result that looks
+   like it came off a dolly or a crane rather than off a low-pass filter. Solved
+   as a linear program with a built-in solver, so it needs no extra dependency.
+   It is steered by the usual knobs: `zoom`/`optzoom` give it the crop budget it
+   may spend, `smoothing` the horizon over which the path should stay rigid.
+ * Smart and fast multi measurement fields detection algorithm with contrast selection.
+ * Clipping options: keep blank (black) or keep from previous frames.
+ * Optional drawing of measurement fields and detected transformations for visual analysis.
+ * Zooming possible to get rid of jiggling borders (automatic mode).
+ * Resulting images are interpolated (different algorithms).
+ * Virtual-tripod-mode to get a tripod experience.
+
+**NOTE:** This readme covers using vidstab with Ffmpeg. Questions are welcome at
+georg dot martius @ web dot de
+
+## System Requirements
+ * A Linux-based system
+ * ffmpeg source code
+ * Cmake
+
+The L1-optimal camera path is solved with a built-in interior point solver and
+needs nothing else. GLPK can be used instead with `cmake -DVIDSTAB_LPSOLVER=glpk`;
+the test suite runs against either and cross-checks both against the reference
+implementation in `docs/l1campath-reference.py`.
+
+## Installation Instructions
+
+For using vidstab library with ffmpeg, ffmpeg must to be configured using `--enable-libvidstab ` option.
+
+### Default Build and Installation:
+##### Installing vidstab library:
+
+```shell
+cd path/to/vid.stab/dir/
+cmake .
+make
+sudo make install
+```
+
+##### Installing ffmpeg:
+
+```shell
+cd path/to/ffmpeg/dir/
+./configure --enable-gpl --enable-libvidstab <other configure options>
+make
+sudo make install
+```
+
+**On `--enable-gpl`:** vidstab itself is LGPL-2.1-or-later and does not require
+it, but ffmpeg's `configure` still gates `--enable-libvidstab` behind
+`--enable-gpl`, so it remains necessary when building ffmpeg. It is an ffmpeg
+packaging decision, not a licence requirement of this library.
+
+### Alternatively one can install vidstab into a custom directory this way:
+##### Installing vidstab library:
+
+```shell
+cd path/to/vid.stab/dir/
+cmake -DCMAKE_INSTALL_PREFIX:PATH=path/to/install_dir/
+make
+sudo make install
+```
+
+##### Installing ffmpeg:
+
+```shell
+cd path/to/ffmpeg/dir/
+PKG_CONFIG_PATH="path/to/install_dir/lib/pkgconfig" \
+./configure --enable-gpl --enable-libvidstab <other optionalconfigure options>
+make
+sudo make install
+```
+
+Before running ffmpeg for the first time, make sure to export `LD_LIBRARY_PATH` to point to vidstab library, e.g.,
+
+```shell
+export LD_LIBRARY_PATH=path/to/install_dir/lib:$LD_LIBRARY_PATH
+```
+
+## Usage instructions
+
+**Currently with ffmpeg, vidstab library must run in two-pass mode.** The first pass employs the **vidstabdetect** filter and the second pass uses the **vidstabtransform** filter.
+
+*If you need a single pass, ffmpeg's own
+[deshake](http://www.ffmpeg.org/ffmpeg-filters.html#deshake) filter can do that, though the vidstab two-pass filters give superior results.*
+
+The vidstabdetect filter (in first pass) will generate a file with relative-translation and rotation-transform information about subsequent frames. This information will then be read by vidstabtransform filter (in second pass) to compensate for the jerky motions and produce a stable video output.
+
+Make sure that you use [unsharp](http://www.ffmpeg.org/ffmpeg-filters.html#unsharp-1) filter provided by ffmpeg for best results (only in second pass).
+
+NOTE: 10-bit 4:2:2 video must be downsampled to 8-bit 4:2:0 to avoid distortions like chroma shift or color bleed/smearing (see `format=yuv420p` example below).
+
+*See [the list of ffmpeg filters](http://www.ffmpeg.org/ffmpeg-filters.html) to know more about vidstabdetect, vidstabtransform and all other filters available with ffmpeg.*
+
+### Interlaced video
+
+**Deinterlace before stabilizing.** Vidstab has no notion of fields: it treats
+every input frame as one progressive image. Feeding it interlaced material means
+the two fields — half a frame period apart, and thus showing different motion —
+are analysed as a single picture, so the comb artefacts are measured as image
+content and the detected motion is a meaningless average of the two fields.
+Transforming then shifts both fields together, which does not undo the shake and
+smears the combing across the frame.
+
+Put a deinterlacer before `vidstabdetect` in both passes, e.g. with
+[yadif](http://www.ffmpeg.org/ffmpeg-filters.html#yadif-1):
+
+```shell
+ffmpeg -i input.mkv -vf yadif,vidstabdetect -f null -
+ffmpeg -i input.mkv -vf yadif,vidstabtransform,unsharp=5:5:0.8:3:3:0.4 out_stabilized.mp4
+```
+
+Use the same deinterlacer settings in both passes, since the transforms are
+measured in pixels of the frames the first pass saw. If you deinterlace to
+double rate (`yadif=1`, one frame per field) that is fine — just do it in both
+passes so the frame counts line up. Stabilizing and re-interlacing to keep an
+interlaced deliverable is not supported.
+
+### The transform file
+
+The `.trf` file written by the first pass is documented in
+[docs/trf-format.md](docs/trf-format.md) — both encodings, the meaning of the
+stored values, and how to supply a camera path of your own.
+
+### Available options with vidstab filters:
+
+##### First pass (vidstabdetect filter):
+
+<dl>
+  <dt><b>result</b></dt>
+  <dd>Set the path to the file used to write the transforms information. Default value is <b>transforms.trf</b>.</dd>
+  <dt><b>shakiness</b></dt>
+  <dd>Set the shakiness of input video or quickness of camera. It accepts an integer in the range 1-10, a value of 1 means little shakiness, a value of 10 means strong shakiness. Default value is 5.</dd>
+  <dt><b>accuracy</b></dt>
+  <dd>Set the accuracy of the detection process. It must be a value in the range 1-15. A value of 1 means low accuracy, a value of 15 means high accuracy. Default value is 15.</dd>
+  <dt><b>stepsize</b></dt>
+  <dd>Set stepsize of the search process. The region around minimum is scanned with 1 pixel resolution. Default value is 6.</dd>
+  <dt><b>mincontrast</b></dt>
+  <dd>Set minimum contrast. Any measurement field having contrast below this value is discarded. Must be a floating point value in the range 0-1. Default value is 0.3.</dd>
+  <dt><b>tripod</b></dt>
+  <dd>  Set reference frame number for tripod mode.  If enabled, the motion of the frames is compared to a reference frame in the filtered stream, identified by the specified number. The intention is to compensate all movements in a more-or-less static scene and keep the camera view absolutely still. If set to 0, it is disabled. The frames are counted starting from 1.
+  <br>Frames before the reference frame are not stabilized: no correction is applied to them (they are still zoomed/cropped like the rest of the clip), and stabilization begins at the reference frame, where the view snaps to the reference pose.
+  <br>NOTE: If this mode is used in first pass then it should also be used in second pass.</dd>
+  <dt><b>show</b></dt>
+  <dd>Show fields and transforms in the resulting frames for visual analysis. It accepts an integer in the range 0-2. Default value is 0, which disables any visualization.
+  <br>In tripod mode, frames before the reference frame show no overlay, since no motion is measured for them.</dd>
+</dl>
+
+
+
+##### Examples:
+  Use default values:
+```shell
+ffmpeg -i input.mp4 -vf vidstabdetect -f null -
+```
+
+  *` -f null - ` makes sure that no output is produced as this is just the first pass. This in-turn results in faster speed.*
+
+  Analyzing strongly shaky video and putting the results in file `mytransforms.trf`:
+```shell
+ffmpeg -i input.mp4 -vf vidstabdetect=shakiness=10:accuracy=15:result="mytransforms.trf" -f null -
+```
+
+  Visualizing the result of internal transformations in the resulting video:
+```shell
+ffmpeg -i input.mp4 -vf vidstabdetect=show=1 dummy_output.mp4
+```
+
+  Analyzing a video with high shakiness:
+```shell
+ffmpeg -i input.mp4 -vf vidstabdetect=shakiness=10 dummy_output.mp4
+```
+
+  Downsampling a 10-bit 4:2:2 file to 8-bit 4:2:0 to avoid distortion like chroma shift and color bleed/smearing:
+```shell
+ffmpeg -i input.mp4 -vf format=yuv420p,vidstabdetect -f null -
+```
+
+##### Second pass (vidstabtransform filter):
+<dl>
+  <dt><b>input</b></dt>
+  <dd>Set path to the file used to read the transforms. Default value is <b>transforms.trf</b>.</dd>
+  <dt><b>smoothing</b></dt>
+  <dd>Set the number of frames (value*2 + 1), used for lowpass filtering the camera movements. Default value is 10.<br>For example, a number of 10 means that 21 frames are used (10 in the past and 10 in the future) to smoothen the motion in the video. A larger value leads to a smoother video, but limits the acceleration of the camera (pan/tilt movements). 0 is a special case where a static camera is simulated.</dd>
+  <dt><b>optalgo</b></dt>
+  <dd>Set the camera path optimization algorithm. Accepted values are:
+  <br><i><b>gauss:</b></i> Gaussian kernel low-pass filter on camera motion (default).
+  <br><i><b>avg:</b></i> Averaging on transformations.</dd>
+  <dt><b>maxshift</b></dt>
+  <dd>Set maximal number of pixels to translate frames. Default value is -1, meaning: no limit.</dd>
+  <dt><b>maxangle</b></dt>
+  <dd>Set maximal angle in radians (degree*PI/180) to rotate frames. Default value is -1, meaning: no limit.</dd>
+  <dt><b>crop</b></dt>
+  <dd>  Specify how to deal with empty frame borders that may be shrinked-in due to movement compensation. Available values are:
+  <br><i><b>keep</b></i>: Keep image information from previous frame (default).
+  <br><i><b>black</b></i>: Fill the border-areas black.</dd>
+  <dt><b>invert</b></dt>
+  <dd>Invert transforms if set to 1. Default value is 0.</dd>
+  <dt><b>relative</b></dt>
+  <dd>Consider transforms as relative to previous frame if set to 1, absolute if set to 0. Default value is 0.</dd>
+  <dt><b>zoom</b></dt>
+  <dd>Set percentage to zoom. A positive value will result in a zoom-in effect, a negative value in a zoom-out effect. Default value is 0 (no zoom).</dd>
+  <dt><b>optzoom</b></dt>
+  <dd>Set optimal zooming to avoid blank-borders. Accepted values are:
+  <br><i><b>0</b></i>: Disabled.
+  <br><i><b>1</b></i>: Optimal static zoom value is determined (only very strong movements will lead to visible borders) (default).
+  <br><i><b>2</b></i>: Optimal adaptive zoom value is determined (no borders will be visible), see <b>zoomspeed</b>.
+  <br>Note that the value given at zoom is added to the one calculated here.</dd>
+  <dt><b>zoomspeed</b></dt>
+  <dd>Set percent to zoom maximally each frame (enabled when optzoom is set to 2). Range is from 0 to 5, default value is 0.25.</dd>
+  <dt><b>interpol</b></dt>
+  <dd>Specify type of interpolation. Available values are:
+  <br><i><b>no</b></i>: No interpolation.
+  <br><i><b>linear</b></i>: Linear only horizontal.
+  <br><i><b>bilinear</b></i>: Linear in both directions (default).
+  <br><i><b>bicubic</b></i>: Cubic in both directions (slow speed).
+  <dt><b>tripod</b></dt>
+  <dd>Enables virtual tripod mode if set to 1, which is equivalent to <b>relative=0:smoothing=0</b>. Default value is 0.
+  <br>The stored transforms are used as-is: no smoothing or accumulation is applied, they are simply passed through, including the leading zero transforms for frames before the reference frame. Which frames are not stabilized is decided during the first pass.
+  <br>NOTE: If this mode has been used in first pass then it should also be used in second pass.</dd>
+  <dt><b>debug</b></dt>
+  <dd>Increase log verbosity if set to 1. Also the detected global motions are written to the temporary file  <b>global_motions.trf</b> . Default value is 0. </dd>
+
+</dl>
+
+##### Examples:
+  Using default values:
+```shell
+ffmpeg -i input.mp4 -vf vidstabtransform,unsharp=5:5:0.8:3:3:0.4 out_stabilized.mp4
+```
+Note the use of the ffmpeg's unsharp filter which is always recommended.
+
+
+Zooming-in a bit more and load transform data from a given file:
+```shell
+ffmpeg -i input.mp4 -vf vidstabtransform=zoom=5:input="mytransforms.trf" out_stabilized.mp4
+```
+
+Smoothening the video even more:
+```shell
+ffmpeg -i input.mp4 -vf vidstabtransform=smoothing=30:input="mytransforms.trf" out_stabilized.mp4
+```
+
+Downsampling a 10-bit 4:2:2 file to 8-bit 4:2:0 to avoid distortion like chroma shift and color bleed/smearing:
+```shell
+ffmpeg -i input.mp4 -vf format=yuv420p,vidstabtransform out_stabilized.mp4
+```
+
+## Developement/Contributing
+
+Vidstab is an open source library - pull requests are very welcome. Some things you might like to help us out with:
+
+ ** I am looking for a new maintainer/ developer for this project! ** Please reach out to me (Georg), if you are interested.
+
+ * Specific video clips where vidstab is not up-to the mark.
+ * Bugs/fixes.
+ * New features and improvements.
+ * Documentation.
+
+## License
+
+**GNU Lesser General Public License, version 2.1 or later**
+([COPYING.LESSER](./COPYING.LESSER)). Releases up to v1.1.2 were GPL; see
+[RELICENSE.md](./RELICENSE.md).

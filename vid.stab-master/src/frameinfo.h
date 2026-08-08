@@ -1,0 +1,133 @@
+/*
+ *  frameinfo.h
+ *
+ *  Copyright (C) Georg Martius - June 2007 - 2011
+ *   georg dot martius at web dot de
+ *
+ *  SPDX-License-Identifier: LGPL-2.1-or-later
+ *
+ *  This file is part of vid.stab video stabilization library
+ *
+ *  vid.stab is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU Lesser General Public License as published
+ *  by the Free Software Foundation; either version 2.1 of the License, or
+ *  (at your option) any later version.
+ *
+ *  vid.stab is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU Lesser General Public License for more details.
+ *
+ *  You should have received a copy of the GNU Lesser General Public License
+ *  along with vid.stab; see the file COPYING.LESSER.  If not, see
+ *  <https://www.gnu.org/licenses/>.
+ *
+ */
+#ifndef FRAMEINFO_H
+#define FRAMEINFO_H
+
+#include <stddef.h>
+#include <stdlib.h>
+#include <inttypes.h>
+#include "vidstab_api.h"
+/// pixel formats
+typedef enum {PF_NONE = -1,
+              PF_GRAY8,     ///<        Y        ,  8bpp
+              PF_YUV420P,   ///< planar YUV 4:2:0, 12bpp, (1 Cr & Cb sample per 2x2 Y samples)
+              PF_YUV422P,   ///< planar YUV 4:2:2, 16bpp, (1 Cr & Cb sample per 2x1 Y samples)
+              PF_YUV444P,   ///< planar YUV 4:4:4, 24bpp, (1 Cr & Cb sample per 1x1 Y samples)
+              PF_YUV410P,   ///< planar YUV 4:1:0,  9bpp, (1 Cr & Cb sample per 4x4 Y samples)
+              PF_YUV411P,   ///< planar YUV 4:1:1, 12bpp, (1 Cr & Cb sample per 4x1 Y samples)
+              PF_YUV440P,   ///< planar YUV 4:4:0 (1 Cr & Cb sample per 1x2 Y samples)
+              PF_YUVA420P,  ///< planar YUV 4:2:0, 20bpp, (1 Cr & Cb sample per 2x2 Y & A samples)
+              PF_PACKED,    ///< dummy: packed formats start here
+              PF_RGB24,     ///< packed RGB 8:8:8, 24bpp, RGBRGB...
+              PF_BGR24,     ///< packed RGB 8:8:8, 24bpp, BGRBGR...
+              PF_RGBA,      ///< packed RGBA 8:8:8:8, 32bpp, RGBARGBA...
+              PF_NUMBER     ///< number of pixel formats
+} VSPixelFormat;
+
+/** frame information for deshaking lib
+    This only works for planar image formats
+ */
+typedef struct vsframeinfo {
+  int width, height;
+  int planes;        // number of planes (1 luma, 2,3 chroma, 4 alpha)
+  int log2ChromaW; // subsampling of width in chroma planes
+  int log2ChromaH; // subsampling of height in chroma planes
+  VSPixelFormat pFormat;
+  int bytesPerPixel; // number of bytes per pixel (for packed formats)
+} VSFrameInfo;
+
+/** frame data according to frameinfo
+ */
+typedef struct vsframe {
+  uint8_t* data[4]; // data in planes. For packed data everthing is in plane 0
+  int linesize[4]; // line size of each line in a the planes
+} VSFrame;
+
+// use it to calculate the CHROMA sizes (rounding is correct)
+#define CHROMA_SIZE(width,log2sub)  (-(-(width) >> (log2sub)))
+
+/** initializes the frameinfo for the given format.
+
+    The dimensions must be compatible with the chroma subsampling of the
+    requested format, i.e. width must be a multiple of 1<<log2ChromaW and
+    height a multiple of 1<<log2ChromaH. Formats without subsampling
+    (PF_GRAY8, PF_YUV444P and the packed formats) accept any positive size,
+    so odd widths/heights are fine for those.
+
+    @return non-zero (1) on success, 0 if the pixel format is unknown or the
+            dimensions are invalid for it. Note the boolean convention: this
+            is *not* VS_OK/VS_ERROR.
+ */
+VS_API int vsFrameInfoInit(VSFrameInfo* fi, int width, int height, VSPixelFormat pFormat);
+
+
+/// returns the subsampling shift amount, horizonatally for the given plane
+VS_API int vsGetPlaneWidthSubS(const VSFrameInfo* fi, int plane);
+
+/// returns the subsampling shift amount, vertically for the given plane
+VS_API int vsGetPlaneHeightSubS(const VSFrameInfo* fi, int plane);
+
+/// zero initialization
+VS_API void vsFrameNull(VSFrame* frame);
+
+/// returns true if frame is null (data[0]==0)
+VS_API int vsFrameIsNull(const VSFrame* frame);
+
+/// compares two frames for identity (based in data[0])
+VS_API int vsFramesEqual(const VSFrame* frame1,const VSFrame* frame2);
+
+/// allocates memory for a frame
+VS_API void vsFrameAllocate(VSFrame* frame, const VSFrameInfo* fi);
+
+
+/// copies the given plane number from src to dest
+VS_API void vsFrameCopyPlane(VSFrame* dest, const VSFrame* src,
+                    const VSFrameInfo* fi, int plane);
+
+/// copies src to dest
+VS_API void vsFrameCopy(VSFrame* dest, const VSFrame* src, const VSFrameInfo* fi);
+
+/** fills the data pointer so that it corresponds to the img saved in the linear buffer.
+    No copying is performed.
+    Do not call vsFrameFree() on it.
+ */
+VS_API void vsFrameFillFromBuffer(VSFrame* frame, uint8_t* img, const VSFrameInfo* fi);
+
+/// frees memory
+VS_API void vsFrameFree(VSFrame* frame);
+
+#endif  /* FRAMEINFO_H */
+
+/*
+ * Local variables:
+ *   c-file-style: "stroustrup"
+ *   c-file-offsets: ((case-label . *) (statement-case-intro . *))
+ *   indent-tabs-mode: nil
+ *   c-basic-offset: 2 t
+ * End:
+ *
+ * vim: expandtab shiftwidth=2:
+ */

@@ -42,54 +42,62 @@
 #define ASCII_SERIALIZATION_MODE 1
 #define BINARY_SERIALIZATION_MODE 2
 
+/**
+ * 运动检测配置结构体
+ * 控制运动检测算法的各种参数
+ */
 typedef struct _vsmotiondetectconfig {
-  /* meta parameter for maxshift and fieldsize between 1 and 15 */
-  int         shakiness;
-  int         accuracy;         // meta parameter for number of fields between 1 and 10
-  int         stepSize;         // stepsize of field transformation detection
-  int         algo;             // deprecated
-  int         virtualTripod;
-  /* if 1 and 2 then the fields and transforms are shown in the frames */
-  int         show;
-  /* measurement fields with lower contrast are discarded */
-  double      contrastThreshold;
-  const char* modName;          // module name (used for logging)
-  int         numThreads;       // number of threads to use (automatically set if 0)
+  /* 元参数，用于控制maxshift和fieldsize，取值范围1-15 */
+  int         shakiness;        // 视频抖动程度：1(轻微)到15(严重抖动)
+  int         accuracy;         // 检测精度：元参数，控制测量场数量，取值范围1-10
+  int         stepSize;         // 场变换检测的步长大小
+  int         algo;             // 已弃用
+  int         virtualTripod;    // 虚拟三脚架模式
+  /* 如果为1或2，则在帧中显示测量场和变换 */
+  int         show;             // 0:不显示，1-2:显示场和变换
+  /* 对比度低于此阈值的测量场将被丢弃 */
+  double      contrastThreshold; // 对比度阈值，取值范围0-1
+  const char* modName;          // 模块名称（用于日志记录）
+  int         numThreads;       // 使用的线程数（0表示自动设置）
 } VSMotionDetectConfig;
 
-/** structure for motion detection fields */
+/** 运动检测场结构体
+    定义用于检测帧间运动的测量场参数
+ */
 typedef struct _vsmotiondetectfields {
-  /* maximum number of pixels we expect the shift of subsequent frames */
-  int maxShift;
-  int stepSize;                 // stepsize for detection
-  int fieldNum;                 // number of measurement fields
-  int maxFields;                // maximum number of fields used (selected by contrast)
-  double contrastThreshold;     // fields with lower contrast are discarded
-  int fieldSize;                // size = min(md->width, md->height)/10;
-  int fieldRows;                // number of rows
-  Field* fields;                // measurement fields
-  short useOffset;              // if true then the offset us used
-  VSTransform offset;           // offset for detection (e.g. known from coarse scan)
+  /* 我们期望的连续帧间最大位移像素数 */
+  int maxShift;                 // 最大位移（像素）
+  int stepSize;                 // 检测步长
+  int fieldNum;                 // 测量场数量
+  int maxFields;                // 使用的最大场数（根据对比度选择）
+  double contrastThreshold;     // 对比度阈值，低于此值的场将被丢弃
+  int fieldSize;                // 场大小 = min(宽度, 高度)/10
+  int fieldRows;                // 场的行数
+  Field* fields;                // 测量场数组
+  short useOffset;              // 如果为true，则使用偏移量
+  VSTransform offset;           // 检测偏移量（例如从粗略扫描中获得）
 } VSMotionDetectFields;
 
-/** data structure for motion detection part of deshaking*/
+/** 运动检测数据结构体
+    包含视频防抖运动检测部分的所有状态和数据
+ */
 typedef struct _vsmotiondetect {
-  VSFrameInfo fi;
+  VSFrameInfo fi;               // 帧信息结构体
 
-  VSMotionDetectConfig conf;
+  VSMotionDetectConfig conf;    // 运动检测配置
 
-  VSMotionDetectFields fieldscoarse;
-  VSMotionDetectFields fieldsfine;
+  VSMotionDetectFields fieldscoarse;  // 粗略检测场
+  VSMotionDetectFields fieldsfine;    // 精细检测场
 
-  VSFrame curr;                 // blurred version of current frame buffer
-  VSFrame currorig;             // current frame buffer (original) (only pointer)
-  VSFrame currtmp;              // temporary buffer for blurring
-  VSFrame prev;                 // frame buffer for last frame (copied)
-  short hasSeenOneFrame;        // true if we have a valid previous frame
-  int initialized;              // 1 if initialized and 2 if configured
-  int serializationMode;        // 1 if ascii and 2 if binary
+  VSFrame curr;                 // 当前帧缓冲区的模糊版本
+  VSFrame currorig;             // 当前帧缓冲区（原始版本，仅指针）
+  VSFrame currtmp;              // 用于模糊处理的临时缓冲区
+  VSFrame prev;                 // 上一帧的帧缓冲区（已复制）
+  short hasSeenOneFrame;        // 如果有有效的上一帧则为true
+  int initialized;              // 1表示已初始化，2表示已配置
+  int serializationMode;        // 1表示ASCII模式，2表示二进制模式
 
-  int frameNum;
+  int frameNum;                 // 当前帧编号
 } VSMotionDetect;
 
 static const char vs_motiondetect_help[] = ""
@@ -116,34 +124,32 @@ static const char vs_motiondetect_help[] = ""
     "    'help'        print this help message\n";
 
 
-/** returns the default config
+/** 返回默认配置
  */
 VS_API VSMotionDetectConfig vsMotionDetectGetDefaultConfig(const char* modName);
 
-/** initialized the VSMotionDetect structure and allocates memory
- *  for the frames and stuff
- *  @return VS_OK on success otherwise VS_ERROR
+/** 初始化VSMotionDetect结构体并为帧等分配内存
+ *  @return 成功返回VS_OK，否则返回VS_ERROR
  */
 VS_API int vsMotionDetectInit(VSMotionDetect* md, const VSMotionDetectConfig* conf,
                        const VSFrameInfo* fi);
 
 /**
- *  Performs a motion detection step
- *  Only the new current frame is given. The last frame
- *  is stored internally
- *  @param motions: calculated local motions. (must be deleted manually)
+ *  执行运动检测步骤
+ *  只提供新的当前帧。上一帧存储在内部
+ *  @param motions: 计算得到的局部运动（需要手动删除）
  * */
 VS_API int vsMotionDetection(VSMotionDetect* md, LocalMotions* motions, VSFrame *frame);
 
-/** Deletes internal data structures.
- * In order to use the VSMotionDetect again, you have to call vsMotionDetectInit
+/** 删除内部数据结构
+ * 要再次使用VSMotionDetect，必须调用vsMotionDetectInit
  */
 VS_API void vsMotionDetectionCleanup(VSMotionDetect* md);
 
-/// returns the current config
+/// 返回当前配置
 VS_API void vsMotionDetectGetConfig(VSMotionDetectConfig* conf, const VSMotionDetect* md);
 
-/// returns the frame info
+/// 返回帧信息
 VS_API const VSFrameInfo* vsMotionDetectGetFrameInfo(const VSMotionDetect* md);
 
 #endif  /* MOTIONDETECT_H */

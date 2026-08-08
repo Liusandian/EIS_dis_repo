@@ -48,54 +48,79 @@
 #define USE_SPIRAL_FIELD_CALC
 
 
-/* internal data structures */
+/* 内部数据结构 */
 
-// structure that contains the contrast and the index of a field
+// 包含场的对比度和索引的结构体
 typedef struct _contrast_idx {
-  double contrast;
-  int index;
+  double contrast;  // 场的对比度值
+  int index;        // 场的索引
 } contrast_idx;
 
 
+/**
+ * 获取默认的运动检测配置
+ * @param modName 模块名称（用于日志记录）
+ * @return 默认的运动检测配置结构体
+ */
 VSMotionDetectConfig vsMotionDetectGetDefaultConfig(const char* modName){
   VSMotionDetectConfig conf;
-  conf.stepSize          = 6;
-  conf.accuracy          = 15;
-  conf.shakiness         = 5;
-  conf.virtualTripod     = 0;
-  conf.contrastThreshold = 0.25;
-  conf.show              = 0;
-  conf.modName           = modName;
-  conf.numThreads        = 0;
+  conf.stepSize          = 6;     // 默认步长
+  conf.accuracy          = 15;    // 默认精度
+  conf.shakiness         = 5;     // 默认抖动程度
+  conf.virtualTripod     = 0;     // 不使用虚拟三脚架
+  conf.contrastThreshold = 0.25;  // 默认对比度阈值
+  conf.show              = 0;     // 不显示检测场
+  conf.modName           = modName; // 模块名称
+  conf.numThreads        = 0;     // 自动检测线程数
   return conf;
 }
 
+/**
+ * 获取当前的运动检测配置
+ * @param conf 输出参数，用于存储配置
+ * @param md 运动检测结构体指针
+ */
 void vsMotionDetectGetConfig(VSMotionDetectConfig* conf, const VSMotionDetect* md){
   if(md && conf)
     *conf = md->conf;
 }
 
+/**
+ * 获取帧信息
+ * @param md 运动检测结构体指针
+ * @return 帧信息结构体指针
+ */
 const VSFrameInfo* vsMotionDetectGetFrameInfo(const VSMotionDetect* md){
   return &md->fi;
 }
 
 
+/**
+ * 初始化运动检测结构体
+ * 设置SIMD内核、线程数，分配内存等
+ * @param md 运动检测结构体指针
+ * @param conf 运动检测配置指针
+ * @param fi 帧信息指针
+ * @return 成功返回VS_OK，失败返回VS_ERROR
+ */
 int vsMotionDetectInit(VSMotionDetect* md, const VSMotionDetectConfig* conf, const VSFrameInfo* fi){
   assert(md && fi);
   md->conf = *conf;
   md->fi = *fi;
 
+  // 检查像素格式是否支持
   if(fi->pFormat<=PF_NONE ||  fi->pFormat==PF_PACKED || fi->pFormat>=PF_NUMBER) {
     vs_log_warn(md->conf.modName, "unsupported Pixel Format (%i)\n",
                 md->fi.pFormat);
     return VS_ERROR;
   }
 
-  /* pick the SIMD kernels for this machine before anything can call them */
+  /* 在任何东西可以调用它们之前，为此机器选择SIMD内核 */
   vs_simd_init();
   vs_log_info(md->conf.modName, "SIMD: %s\n", vs_simd_active_name());
 
 #ifdef USE_OMP
+  // 自动设置线程数
   if(md->conf.numThreads==0)
     md->conf.numThreads=VS_MAX(omp_get_max_threads()*0.8,1);
   vs_log_info(md->conf.modName, "Multithreading: use %i threads\n",md->conf.numThreads);

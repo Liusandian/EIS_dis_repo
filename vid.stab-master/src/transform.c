@@ -40,9 +40,15 @@
 #endif
 #include <string.h>
 
+// 插值类型名称数组
 const char* interpol_type_names[5] = {"No (0)", "Linear (1)", "Bi-Linear (2)",
                                       "Bi-Cubic (3)"};
 
+/**
+ * 获取插值类型的名称
+ * @param type 插值类型枚举值
+ * @return 插值类型的名称字符串，未知类型返回"unknown"
+ */
 const char* getInterpolationTypeName(VSInterpolType type){
   if (type >= VS_Zero && type < VS_NBInterPolTypes)
     return interpol_type_names[(int) type];
@@ -50,43 +56,72 @@ const char* getInterpolationTypeName(VSInterpolType type){
     return "unknown";
 }
 
-// default initialization: attention the ffmpeg filter cannot call it
+/**
+ * 获取默认的变换配置
+ * 注意：ffmpeg过滤器无法调用此函数
+ * @param modName 模块名称（用于日志记录）
+ * @return 默认的变换配置结构体
+ */
 VSTransformConfig vsTransformGetDefaultConfig(const char* modName){
   VSTransformConfig conf;
-  /* Options */
-  conf.maxShift           = -1;
-  conf.maxAngle           = -1;
-  conf.crop               = VSKeepBorder;
-  conf.relative           = 1;
-  conf.invert             = 0;
-  conf.smoothing          = 15;
-  conf.zoom               = 0;
-  conf.optZoom            = 1;
-  conf.zoomSpeed          = 0.25;
-  conf.interpolType       = VS_BiLinear;
-  conf.verbose            = 0;
-  conf.modName            = modName;
-  conf.simpleMotionCalculation = 0;
-  conf.storeTransforms    = 0;
-  conf.smoothZoom         = 0;
-  conf.camPathAlgo        = VSOptimalL1;
+  /* 选项设置 */
+  conf.maxShift           = -1;          // 无最大位移限制
+  conf.maxAngle           = -1;          // 无最大角度限制
+  conf.crop               = VSKeepBorder;// 保留边界
+  conf.relative           = 1;           // 使用相对变换
+  conf.invert             = 0;           // 不反转变换
+  conf.smoothing          = 15;          // 平滑窗口大小
+  conf.zoom               = 0;           // 无缩放
+  conf.optZoom            = 1;           // 最优静态缩放
+  conf.zoomSpeed          = 0.25;        // 缩放速度
+  conf.interpolType       = VS_BiLinear; // 双线性插值
+  conf.verbose            = 0;           // 不显示详细日志
+  conf.modName            = modName;     // 模块名称
+  conf.simpleMotionCalculation = 0;      // 不使用简单运动计算
+  conf.storeTransforms    = 0;           // 不存储变换
+  conf.smoothZoom         = 0;           // 不平滑缩放
+  conf.camPathAlgo        = VSOptimalL1; // L1最优相机路径算法
   return conf;
 }
 
+/**
+ * 获取当前的变换配置
+ * @param conf 输出参数，用于存储配置
+ * @param td 变换数据结构体指针
+ */
 void vsTransformGetConfig(VSTransformConfig* conf, const VSTransformData* td){
   if(td && conf)
     *conf = td->conf;
 }
 
+/**
+ * 获取源帧的帧信息
+ * @param td 变换数据结构体指针
+ * @return 源帧信息结构体指针
+ */
 const VSFrameInfo* vsTransformGetSrcFrameInfo(const VSTransformData* td){
   return &td->fiSrc;
 }
 
+/**
+ * 获取目标帧的帧信息
+ * @param td 变换数据结构体指针
+ * @return 目标帧信息结构体指针
+ */
 const VSFrameInfo* vsTransformGetDestFrameInfo(const VSTransformData* td){
   return &td->fiDest;
 }
 
 
+/**
+ * 初始化变换数据结构体
+ * 根据配置和帧信息设置变换处理所需的数据结构
+ * @param td 变换数据结构体指针
+ * @param conf 变换配置指针
+ * @param fi_src 源帧信息指针
+ * @param fi_dest 目标帧信息指针
+ * @return 成功返回VS_OK，失败返回VS_ERROR
+ */
 int vsTransformDataInit(VSTransformData* td, const VSTransformConfig* conf,
                         const VSFrameInfo* fi_src, const VSFrameInfo* fi_dest){
   td->conf = *conf;
@@ -100,13 +135,16 @@ int vsTransformDataInit(VSTransformData* td, const VSTransformConfig* conf,
   vsFrameNull(&td->destbuf);
   vsFrameNull(&td->dest);
 
+  // 限制最大位移不超过帧尺寸的一半
   if (td->conf.maxShift > td->fiDest.width/2)
     td->conf.maxShift = td->fiDest.width/2;
   if (td->conf.maxShift > td->fiDest.height/2)
     td->conf.maxShift = td->fiDest.height/2;
 
+  // 限制插值类型在有效范围内
   td->conf.interpolType = VS_MAX(VS_MIN(td->conf.interpolType,VS_BiCubic),VS_Zero);
 
+  // 根据插值类型设置相应的插值函数
   switch(td->conf.interpolType){
    case VS_Zero:     td->interpolate = &interpolateZero; break;
    case VS_Linear:   td->interpolate = &interpolateLin; break;
@@ -115,6 +153,7 @@ int vsTransformDataInit(VSTransformData* td, const VSTransformConfig* conf,
    default: td->interpolate = &interpolateBiLin;
   }
 #ifdef TESTING
+  // 测试模式下也设置浮点版本的插值函数
   switch(td->conf.interpolType){
    case VS_Zero:     td->_FLT(interpolate) = &_FLT(interpolateZero); break;
    case VS_Linear:   td->_FLT(interpolate) = &_FLT(interpolateLin); break;
@@ -127,24 +166,37 @@ int vsTransformDataInit(VSTransformData* td, const VSTransformConfig* conf,
   return VS_OK;
 }
 
+/**
+ * 清理变换数据结构体
+ * 释放分配的内存资源
+ * @param td 变换数据结构体指针
+ */
 void vsTransformDataCleanup(VSTransformData* td){
+  // 释放内部分配的源帧缓冲区
   if (td->srcMalloced && !vsFrameIsNull(&td->src)) {
     vsFrameFree(&td->src);
   }
+  // 如果保留边界模式，释放目标缓冲区
   if (td->conf.crop == VSKeepBorder && !vsFrameIsNull(&td->destbuf)) {
     vsFrameFree(&td->destbuf);
   }
 }
 
+/**
+ * 准备变换操作
+ * 设置源帧和目标帧，处理就地操作和边界保留情况
+ * @param td 变换数据结构体指针
+ * @param src 源帧指针
+ * @param dest 目标帧指针
+ * @return 成功返回VS_OK，失败返回VS_ERROR
+ */
 int vsTransformPrepare(VSTransformData* td, const VSFrame* src, VSFrame* dest){
-  // we first copy the frame to td->src and then overwrite the destination
-  // with the transformed version
+  // 我们首先将帧复制到td->src，然后用变换后的版本覆盖目标
   td->dest = *dest;
-  if(src==dest || td->srcMalloced){ // in place operation: we have to copy the src first
-    // We must own td->src before copying into it. Testing vsFrameIsNull() here
-    // is not enough: after a previous frame took the else branch below, td->src
-    // still aliases *that* caller's buffer, so the copy would write into memory
-    // we do not own (e.g. a decoder reference frame still in use). See #144.
+  if(src==dest || td->srcMalloced){ // 就地操作：我们必须先复制源帧
+    // 在复制之前我们必须拥有td->src。在这里测试vsFrameIsNull()是不够的：
+    // 在前一帧走了下面的else分支后，td->src仍然别名那个调用者的缓冲区，
+    // 所以复制会写入我们不拥有的内存（例如仍在使用的解码器参考帧）。参见#144。
     if(!td->srcMalloced) {
       vsFrameAllocate(&td->src,&td->fiSrc);
       td->srcMalloced = 1;
@@ -154,45 +206,64 @@ int vsTransformPrepare(VSTransformData* td, const VSFrame* src, VSFrame* dest){
       return VS_ERROR;
     }
     vsFrameCopy(&td->src, src, &td->fiSrc);
-  }else{ // otherwise no copy needed
+  }else{ // 否则不需要复制
     td->src=*src;
   }
   if (td->conf.crop == VSKeepBorder) {
     if(vsFrameIsNull(&td->destbuf)) {
-      // if we keep the borders, we need a second buffer to store
-      //  the previous stabilized frame, so we use destbuf
+      // 如果我们保留边界，我们需要第二个缓冲区来存储前一个稳定帧，所以我们使用destbuf
       vsFrameAllocate(&td->destbuf,&td->fiDest);
       if (vsFrameIsNull(&td->destbuf)) {
         vs_log_error(td->conf.modName, "vs_malloc failed\n");
         return VS_ERROR;
       }
-      // if we keep borders, save first frame into the background buffer (destbuf)
-      vsFrameCopy(&td->destbuf, src, &td->fiSrc); // here we have to take care
+      // 如果我们保留边界，将第一帧保存到背景缓冲区(destbuf)
+      vsFrameCopy(&td->destbuf, src, &td->fiSrc); // 这里我们需要注意
     }
-  }else{ // otherwise we directly operate on the destination
+  }else{ // 否则我们直接在目标上操作
     td->destbuf = *dest;
   }
   return VS_OK;
 }
 
+/**
+ * 执行实际的变换操作
+ * 根据像素格式选择相应的变换函数
+ * @param td 变换数据结构体指针
+ * @param t 要应用的变换
+ * @return 成功返回VS_OK，失败返回VS_ERROR
+ */
 int vsDoTransform(VSTransformData* td, VSTransform t){
   if (td->fiSrc.pFormat < PF_PACKED)
-    return transformPlanar(td, t);
+    return transformPlanar(td, t);  // 平面格式变换
   else
-    return transformPacked(td, t);
+    return transformPacked(td, t);   // 紧缩格式变换
 }
 
 
+/**
+ * 完成变换操作
+ * 处理边界保留模式下的帧复制
+ * @param td 变换数据结构体指针
+ * @return 成功返回VS_OK，失败返回VS_ERROR
+ */
 int vsTransformFinish(VSTransformData* td){
   if(td->conf.crop == VSKeepBorder){
-    // we have to store our result to video buffer
-    // note: destbuf stores stabilized frame to be the default for next frame
+    // 我们必须将结果存储到视频缓冲区
+    // 注意：destbuf存储稳定帧作为下一帧的默认值
     vsFrameCopy(&td->dest, &td->destbuf, &td->fiSrc);
   }
   return VS_OK;
 }
 
 
+/**
+ * 获取下一个变换
+ * 从变换序列中返回下一个变换，并增加内部计数器
+ * @param td 变换数据结构体指针
+ * @param trans 变换序列指针
+ * @return 下一个变换，如果没有足够的变换则返回最后一个
+ */
 VSTransform vsGetNextTransform(const VSTransformData* td, VSTransformations* trans){
   if(trans->len <=0 ) return null_transform();
   if (trans->current >= trans->len) {
@@ -206,6 +277,10 @@ VSTransform vsGetNextTransform(const VSTransformData* td, VSTransformations* tra
   return trans->ts[trans->current-1];
 }
 
+/**
+ * 初始化变换序列结构体
+ * @param trans 变换序列指针
+ */
 void vsTransformationsInit(VSTransformations* trans){
   trans->ts = 0;
   trans->len = 0;
@@ -213,6 +288,11 @@ void vsTransformationsInit(VSTransformations* trans){
   trans->warned_end = 0;
 }
 
+/**
+ * 清理变换序列结构体
+ * 释放变换数组内存
+ * @param trans 变换序列指针
+ */
 void vsTransformationsCleanup(VSTransformations* trans){
   if (trans->ts) {
     vs_free(trans->ts);
@@ -222,25 +302,21 @@ void vsTransformationsCleanup(VSTransformations* trans){
 }
 
 /*
- *  This is actually the core algorithm for canceling the jiggle in the
- *  movie. We have different implementations which are patched here.
+ *  这是消除视频中抖动的核心算法。
+ *  我们有不同的实现，在这里进行选择。
  */
 int cameraPathOptimization(VSTransformData* td, VSTransformations* trans){
   switch(td->conf.camPathAlgo){
    case VSAvg: return cameraPathAvg(td,trans);
    case VSOptimalL1:
 #ifdef VS_HAVE_LPSOLVER
-    /* L1 optimizes a camera path built by composing relative transforms, so
-       absolute ones put it out of scope by construction rather than by
-       failure.  That is the tripod configuration (relative=0:smoothing=0),
-       where the stored transforms are already the final per-frame corrections
-       and the gaussian filter leaves them untouched -- exactly what tripod
-       wants.  Go there directly, so a correct setup stays quiet. */
+    /* L1优化通过组合相对变换来构建相机路径，所以绝对变换通过构造而不是失败使其超出范围。
+       那是三脚架配置(relative=0:smoothing=0)，其中存储的变换已经是最终的每帧校正，
+       高斯滤波器保持它们不变——这正是三脚架想要的。
+       直接去那里，所以正确的设置保持安静。 */
     if(td->conf.relative){
-      /* cameraPathOptimalL1 leaves trans untouched unless it succeeds, so
-         falling back to the gaussian filter is safe.  It fails for sequences
-         shorter than 4 frames, without a zoom budget, and if the LP turns out
-         to be infeasible. */
+      /* cameraPathOptimalL1除非成功否则保持trans不变，所以回退到高斯滤波器是安全的。
+         它对于短于4帧的序列、没有缩放预算以及如果LP证明不可行时都会失败。 */
       if(cameraPathOptimalL1(td,trans)==VS_OK) return VS_OK;
       vs_log_msg(td->conf.modName,
                  "L1 camera path optimization unavailable, using gaussian filter");
@@ -253,9 +329,9 @@ int cameraPathOptimization(VSTransformData* td, VSTransformations* trans){
 }
 
 /*
- *  We perform a low-pass filter on the camera path.
- *  This supports slow camera movemen, but in a smooth fasion.
- *  Here we use gaussian filter (gaussian kernel) lowpass filter
+ *  我们对相机路径执行低通滤波。
+ *  这支持缓慢的相机移动，但是以平滑的方式。
+ *  这里我们使用高斯滤波器（高斯核）低通滤波器
  */
 int cameraPathGaussian(VSTransformData* td, VSTransformations* trans){
   VSTransform* ts = trans->ts;
@@ -265,7 +341,7 @@ int cameraPathGaussian(VSTransformData* td, VSTransformations* trans){
     vs_log_msg(td->conf.modName, "Preprocess transforms:");
   }
 
-  /* relative to absolute (integrate transformations) */
+  /* 相对到绝对（积分变换） */
   if (td->conf.relative) {
     VSTransform t = ts[0];
     for (int i = 1; i < trans->len; i++) {
@@ -275,11 +351,12 @@ int cameraPathGaussian(VSTransformData* td, VSTransformations* trans){
   }
 
   if (td->conf.smoothing>0) {
+    // 创建变换副本用于滤波
     VSTransform* ts2 = vs_malloc(sizeof(VSTransform) * trans->len);
     memcpy(ts2, ts, sizeof(VSTransform) * trans->len);
     int s = td->conf.smoothing * 2 + 1;
     VSArray kernel = vs_array_new(s);
-    // initialize gaussian kernel
+    // 初始化高斯核
     int mu        = td->conf.smoothing;
     double sigma2 = sqr(mu/2.0);
     for(int i=0; i<=mu; i++){
@@ -287,20 +364,21 @@ int cameraPathGaussian(VSTransformData* td, VSTransformations* trans){
     }
     // vs_array_print(kernel, stdout);
 
+    // 对每个变换进行高斯滤波
     for (int i = 0; i < trans->len; i++) {
-      // make a convolution:
+      // 进行卷积运算：
       double weightsum=0;
       VSTransform avg = null_transform();
       for(int k=0; k<s; k++){
         int idx = i+k-mu;
         if(idx>=0 && idx<trans->len){
-          if(unlikely(0 && ts2[idx].extra==1)){ // deal with scene cuts or bad frames
-            if(k<mu) { // in the past of our frame: ignore everthing before
+          if(unlikely(0 && ts2[idx].extra==1)){ // 处理场景切换或坏帧
+            if(k<mu) { // 在我们帧的过去：忽略之前的一切
               avg=null_transform();
               weightsum=0;
               continue;
-            }else{           //current frame or in future: stop here
-              if(k==mu)      //for current frame: ignore completely
+            }else{           //当前帧或在未来：停在这里
+              if(k==mu)      //对于当前帧：完全忽略
                 weightsum=0;
               break;
             }
@@ -312,7 +390,7 @@ int cameraPathGaussian(VSTransformData* td, VSTransformations* trans){
       if(weightsum>0){
         avg = mult_transform(&avg, 1.0/weightsum);
 
-        // high frequency must be transformed away
+        // 高频必须被变换掉
         ts[i] = sub_transforms(&ts[i], &avg);
       }
       if (td->conf.verbose & VS_DEBUG) {

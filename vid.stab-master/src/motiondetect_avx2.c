@@ -1,11 +1,10 @@
 /*
  *  motiondetect_avx2.c
  *
- *  AVX2 (32 byte vector) kernels for the motion detection inner loops.
+ *  用于运动检测内循环的AVX2（32字节向量）内核。
  *
- *  This file is compiled with -mavx2 and must therefore never be entered
- *  unless vs_cpu_flags() reported VS_CPU_AVX2.  It contains no code that runs
- *  on the dispatch path itself.
+ *  此文件使用-mavx2编译，因此除非vs_cpu_flags()报告VS_CPU_AVX2，
+ *  否则绝不能进入。它不包含在调度路径本身上运行的代码。
  *
  *  SPDX-License-Identifier: LGPL-2.1-or-later
  *
@@ -33,21 +32,25 @@
 
 #include <immintrin.h>
 
-/* Rows to accumulate before testing the running sum against the threshold.
-   1 means "every row", which makes these kernels return exactly the same value
-   as compareSubImg_thr / _sse2 in every case, early exit included -- a much
-   easier property to test than "greater than the threshold".  Coarser cadences
-   are legal (the caller only ever uses the result as "error < minerror", see
-   tests/test_simd_equivalence.c) and save a horizontal reduction per row, but
-   measured only ~1.5% end to end at 1080p, which is not worth giving up the
-   exact-equality guarantee for. */
+/* 在测试运行总和与阈值之前要累积的行数。
+   1意味着"每一行"，这使得这些内核在每种情况下都返回与compareSubImg_thr / _sse2完全相同的值，
+   包括提前退出——这是一个比"大于阈值"更容易测试的属性。
+   较粗的节拍是合法的（调用者只将结果用作"error < minerror"，参见tests/test_simd_equivalence.c），
+   并且每行节省一次水平归约，但在1080p下测得仅节省约1.5%的端到端性能，
+   这不值得放弃精确相等保证。 */
 #ifndef VS_AVX2_CHECK_ROWS
 #define VS_AVX2_CHECK_ROWS 1
 #endif
 
-/* Horizontal sum of the four 64 bit lanes an accumulated _mm256_sad_epu8
-   produces.  Each lane holds at most rows*32*255, so 64 bits cannot overflow
-   and the result fits comfortably in 32 bits for any real field size. */
+/* 累积的_mm256_sad_epu8产生的四个64位通道的水平求和。
+   每个通道最多保存rows*32*255，所以64位不会溢出，
+   并且对于任何真实的场大小，结果都能舒适地放入32位中。 */
+/**
+ * AVX2 SAD（绝对差和）的水平求和
+ * @param v 256位累加器
+ * @param tail 128位尾部累加器
+ * @return 水平求和结果
+ */
 static inline unsigned int hsum_sad256(__m256i v, __m128i tail) {
   __m128i lo = _mm256_castsi256_si128(v);
   __m128i hi = _mm256_extracti128_si256(v, 1);
@@ -56,6 +59,21 @@ static inline unsigned int hsum_sad256(__m256i v, __m128i tail) {
   return (unsigned int)_mm_cvtsi128_si32(s);
 }
 
+/**
+ * 使用AVX2优化比较两个子图像（带阈值检查）
+ * 这是运动检测的核心函数，使用SIMD指令加速计算
+ * @param I1 第一幅图像指针
+ * @param I2 第二幅图像指针
+ * @param field 测量场指针
+ * @param linesize1 第一幅图像的行大小
+ * @param linesize2 第二幅图像的行大小
+ * @param height 图像高度
+ * @param bytesPerPixel 每像素字节数
+ * @param d_x X方向位移
+ * @param d_y Y方向位移
+ * @param treshold 提前退出阈值
+ * @return 绝对差和（SAD）
+ */
 unsigned int compareSubImg_thr_avx2(unsigned char* const I1, unsigned char* const I2,
                                     const Field* field,
                                     int linesize1, int linesize2, int height,
@@ -67,8 +85,8 @@ unsigned int compareSubImg_thr_avx2(unsigned char* const I1, unsigned char* cons
   unsigned int sum = 0;
   unsigned char* p1;
   unsigned char* p2;
-  /* field->size is a multiple of 16 (vsMotionDetectInit), so rowBytes is too:
-     a row is a whole number of 32 byte blocks plus at most one 16 byte tail. */
+  /* field->size是16的倍数（vsMotionDetectInit），所以rowBytes也是：
+     一行是整数个32字节块加上最多一个16字节尾部。 */
   int mainBytes = rowBytes & ~31;
   int hasTail   = rowBytes & 16;
   __m256i acc = _mm256_setzero_si256();
@@ -79,25 +97,24 @@ unsigned int compareSubImg_thr_avx2(unsigned char* const I1, unsigned char* cons
 
   for (j = 0; j < field->size; j++) {
     int k;
+    // 处理32字节对齐的主要部分
     for (k = 0; k < mainBytes; k += 32) {
       __m256i a = _mm256_loadu_si256((__m256i const*)(p1 + k));
       __m256i b = _mm256_loadu_si256((__m256i const*)(p2 + k));
       acc = _mm256_add_epi64(acc, _mm256_sad_epu8(a, b));
     }
     if (hasTail) {
-      /* The 16 byte remainder goes into its own 128 bit accumulator rather
-         than being widened into `acc`.  Widening cost a vpxor + vinserti128
-         on every row, and rows are frequently 16 (mod 32) bytes -- the field
-         size is a multiple of 16 but not of 32, so 720p (80) and 1080p (112)
-         both take this path once per row, where that overhead landed on a
-         third and a quarter of the row respectively. */
+      /* 16字节余数进入它自己的128位累加器，而不是被扩展到`acc`中。
+         扩展在每行花费一个vpxor + vinserti128，而行经常是16（mod 32）字节——
+         场大小是16的倍数但不是32的倍数，所以720p（80）和1080p（112）
+         都每行走一次这个路径，其中开销分别落在行的三分之一和四分之一上。 */
       __m128i a = _mm_loadu_si128((__m128i const*)(p1 + mainBytes));
       __m128i b = _mm_loadu_si128((__m128i const*)(p2 + mainBytes));
       accTail = _mm_add_epi64(accTail, _mm_sad_epu8(a, b));
     }
 
-    /* Early exit: this candidate is already worse than the best match so far.
-       The contract (see tests/test_simd_equivalence.c) is only that the value
+    /* 提前退出：这个候选已经比目前为止的最佳匹配更差。
+       契约（参见tests/test_simd_equivalence.c）只是值
        returned by an early exit is greater than the threshold, not that it
        equals the full sum, so checking every VS_AVX2_CHECK_ROWS rows instead
        of every row is allowed and the argmin the caller computes is

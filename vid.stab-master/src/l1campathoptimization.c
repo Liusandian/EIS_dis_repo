@@ -34,18 +34,29 @@
 #include <string.h>
 
 /* ****************************************************************************
- * operations on VSTransformLS
+ * VSTransformLS 操作
+ * 这是用于L1优化的变换表示，使用相似性矩阵的线性系统表示
  * ************************************************************************** */
 
+/**
+ * 创建单位变换（LS格式）
+ * @return 单位变换结构体
+ */
 VSTransformLS id_transformLS(void){
   VSTransformLS t = { 0.0, 0.0, 1.0, 0.0, 0 };
   return t;
 }
 
-/* matrix product t1 * t2, i.e. t2 is applied first.  With
+/* 矩阵乘积 t1 * t2，即先应用t2。使用相似性矩阵：
      [ a  b  x ]           (t1 t2).x = a1 x2 + b1 y2 + x1
      [-b  a  y ]           (t1 t2).a = a1 a2 - b1 b2
-   this is just the product of the two similarity matrices. */
+   这只是两个相似性矩阵的乘积。 */
+/**
+ * 连接两个LS变换（矩阵乘法）
+ * @param t1 第一个变换
+ * @param t2 第二个变换（先应用）
+ * @return 组合后的变换
+ */
 VSTransformLS concat_transformLS(const VSTransformLS* t1, const VSTransformLS* t2){
   VSTransformLS t;
   t.x     = t1->a * t2->x + t1->b * t2->y + t1->x;
@@ -56,10 +67,15 @@ VSTransformLS concat_transformLS(const VSTransformLS* t1, const VSTransformLS* t
   return t;
 }
 
+/**
+ * 反转LS变换
+ * @param t 要反转的变换
+ * @return 反转后的变换
+ */
 VSTransformLS invert_transformLS(const VSTransformLS* t){
   VSTransformLS r;
   double z = t->a * t->a + t->b * t->b;
-  if (z == 0.0) return id_transformLS();  // degenerate, should not happen
+  if (z == 0.0) return id_transformLS();  // 退化情况，不应该发生
   r.a     =  t->a / z;
   r.b     = -t->b / z;
   r.x     = -(r.a * t->x + r.b * t->y);
@@ -68,12 +84,25 @@ VSTransformLS invert_transformLS(const VSTransformLS* t){
   return r;
 }
 
+/**
+ * 应用LS变换到向量
+ * @param rx 输出X坐标
+ * @param ry 输出Y坐标
+ * @param t 变换结构体
+ * @param x 输入X坐标
+ * @param y 输入Y坐标
+ */
 void transformLS_vec(double* rx, double* ry, const VSTransformLS* t,
                      double x, double y){
   *rx =  t->a * x + t->b * y + t->x;
   *ry = -t->b * x + t->a * y + t->y;
 }
 
+/**
+ * 将标准变换（角度-缩放格式）转换为LS变换
+ * @param t 标准变换指针
+ * @return LS变换
+ */
 VSTransformLS transformAZtoLS(const VSTransform* t){
   VSTransformLS r;
   double z = 1.0 + t->zoom / 100.0;
@@ -85,6 +114,11 @@ VSTransformLS transformAZtoLS(const VSTransform* t){
   return r;
 }
 
+/**
+ * 将LS变换转换为标准变换（角度-缩放格式）
+ * @param t LS变换指针
+ * @return 标准变换
+ */
 VSTransform transformLStoAZ(const VSTransformLS* t){
   VSTransform r = null_transform();
   r.x     = t->x;

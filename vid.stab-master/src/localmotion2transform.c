@@ -36,6 +36,14 @@
 /*   return t.tv_sec*1000 + t.tv_usec/1000; */
 /* } */
 
+/**
+ * 将局部运动转换为全局变换
+ * 这是鲁棒估计的核心函数，将多个局部运动场合并为全局变换
+ * @param td 变换数据结构体指针
+ * @param motions 多帧的局部运动集合
+ * @param trans 输出的变换序列
+ * @return 成功返回VS_OK
+ */
 int vsLocalmotions2Transforms(VSTransformData* td,
                               const VSManyLocalMotions* motions,
                               VSTransformations* trans ){
@@ -44,15 +52,19 @@ int vsLocalmotions2Transforms(VSTransformData* td,
   trans->ts = vs_malloc(sizeof(VSTransform)*len );
   /* long start= timeOfDayinMS(); */
   FILE *f=0;
+  // 如果需要存储变换，打开文件
   if(td->conf.storeTransforms){
     f = fopen("global_motions.trf","w");
   }
 
+  // 根据配置选择计算方法
   if(td->conf.simpleMotionCalculation==0){
+    // 使用鲁棒估计方法（推荐）
     for(int i=0; i< vs_vector_size(motions); i++) {
       trans->ts[i]=vsMotionsToTransform(td,VSMLMGet(motions,i), f);
     }
   }else{
+    // 使用简单快速方法
     for(int i=0; i< vs_vector_size(motions); i++) {
       trans->ts[i]=vsSimpleMotionsToTransform(td->fiSrc, td->conf.modName,VSMLMGet(motions,i));
     }
@@ -66,6 +78,11 @@ int vsLocalmotions2Transforms(VSTransformData* td,
   return VS_OK;
 }
 
+/**
+ * 将变换结构体转换为数组
+ * @param t 变换结构体指针
+ * @return 包含x,y,alpha,zoom的数组
+ */
 VSArray vsTransformToArray(const VSTransform* t){
   VSArray a = vs_array_new(4);
   a.dat[0] = t->x;
@@ -75,16 +92,29 @@ VSArray vsTransformToArray(const VSTransform* t){
   return a;
 }
 
+/**
+ * 将数组转换为变换结构体
+ * @param a 包含x,y,alpha,zoom的数组
+ * @return 变换结构体
+ */
 VSTransform vsArrayToTransform(VSArray a){
   return new_transform(a.dat[0],a.dat[1],a.dat[2],a.dat[3],0,0,0);
 }
 
+// 梯度优化数据结构体
 struct VSGradientDat {
-  VSTransformData* td;
-  const LocalMotions* motions;
-  VSArray missmatches; // if negative then local motion is ignored
+  VSTransformData* td;        // 变换数据指针
+  const LocalMotions* motions; // 局部运动集合
+  VSArray missmatches;        // 不匹配度，如果为负则忽略该局部运动
 };
 
+/**
+ * 计算变换质量（用于梯度优化）
+ * 这是一个目标函数，用于评估给定变换参数的质量
+ * @param params 变换参数数组
+ * @param dat 梯度数据指针
+ * @return 误差值，越小表示变换质量越好
+ */
 double calcTransformQuality(VSArray params, void* dat){
   struct VSGradientDat* gd= (struct VSGradientDat*) dat;
   const LocalMotions* motions = gd->motions;
@@ -93,7 +123,7 @@ double calcTransformQuality(VSArray params, void* dat){
   double error=0;
 
   PreparedTransform pt= prepare_transform(&t, &gd->td->fiSrc);
-  int num = 1; // we start with 1 to avoid div by zero
+  int num = 1; // 我们从1开始以避免除零
   for (int i = 0; i < num_motions; i++) {
     if(gd->missmatches.dat[i]>=0){
       LocalMotion* m = LMGet(motions,i);
